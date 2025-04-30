@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str
     WEATHER_API_KEY: str
     TELEGRAM_BOT_TOKEN: str
+    API_BASE_URL: str = "http://localhost:8000"
 
 
 settings = Settings()
