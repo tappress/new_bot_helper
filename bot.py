@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Callable, Any, Dict, Optional, Tuple
 
 import httpx
 from aiogram import Bot, Dispatcher, Router, F
@@ -116,6 +117,170 @@ def extract_currency_from_text(text: str) -> tuple:
     return base, target
 
 
+# Утиліта для роботи з API
+async def make_api_request(
+        endpoint: str,
+        params: Dict[str, Any],
+        message: Message,
+        error_message: str,
+        formatter: Callable[[Dict[str, Any]], str],
+        state: Optional[FSMContext] = None
+) -> bool:
+    """
+    Універсальна функція для виконання API-запитів з обробкою помилок і форматуванням відповіді.
+
+    Args:
+        endpoint: Кінцева точка API
+        params: Параметри запиту
+        message: Об'єкт повідомлення для відповіді
+        error_message: Повідомлення про помилку
+        formatter: Функція для форматування успішної відповіді
+        state: Об'єкт стану FSM для очищення після запиту (опціонально)
+
+    Returns:
+        bool: True якщо запит успішний, False в іншому випадку
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{API_BASE_URL}/{endpoint}", params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            # Форматуємо і відправляємо відповідь
+            formatted_response = formatter(data)
+            await message.answer(formatted_response)
+
+            # Очищаємо стан, якщо він був переданий
+            if state:
+                await state.clear()
+
+            return True
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # Для 404 зазвичай є спеціальне повідомлення на основі параметрів
+            param_value = next(iter(params.values()), "")
+            await message.answer(f"Запит на '{param_value}' не знайдено. Спробуйте інший запит.")
+        else:
+            await message.answer(f"{error_message} Спробуйте пізніше.")
+        logger.error(f"Помилка HTTP при запиті до {endpoint}: {str(e)}")
+    except Exception as e:
+        await message.answer(f"{error_message} Спробуйте пізніше.")
+        logger.error(f"Непередбачена помилка при запиті до {endpoint}: {str(e)}")
+
+    # Очищаємо стан у випадку помилки, якщо він був переданий
+    if state:
+        await state.clear()
+
+    return False
+
+
+# Функції для форматування відповідей від API
+def format_weather_response(data: Dict[str, Any]) -> str:
+    """Форматує дані про погоду у текстове повідомлення"""
+    return (
+        f"🌡 Погода в {data['city']}, {data['country']}:\n\n"
+        f"🌡 Температура: {data['temperature']}°C (відчувається як {data['feels_like']}°C)\n"
+        f"📝 Стан: {data['description']}\n"
+        f"💧 Вологість: {data['humidity']}%\n"
+        f"🌬 Швидкість вітру: {data['wind_speed']} м/с\n"
+        f"🕒 Дані оновлено: {data['timestamp']}"
+    )
+
+
+def format_currency_response(data: Dict[str, Any]) -> str:
+    """Форматує дані про курс валют у текстове повідомлення"""
+    base = data.get("base", "")
+    target = data.get("target", "")
+    rate = data.get("rate", 0)
+
+    return (
+        f"💱 Курс валют {base} → {target}:\n\n"
+        f"1 {base} = {rate:.4f} {target}\n"
+        f"10 {base} = {(rate * 10):.4f} {target}\n"
+        f"100 {base} = {(rate * 100):.4f} {target}\n"
+        f"1000 {base} = {(rate * 1000):.4f} {target}\n\n"
+        f"🕒 Дані на: {data['date']}"
+    )
+
+
+def format_news_response(data: Dict[str, Any], query: Optional[str] = None, category: Optional[str] = None) -> str:
+    """Форматує дані про новини у текстове повідомлення"""
+    articles = data.get("articles", [])
+
+    if not articles:
+        return "На жаль, новин за вашим запитом не знайдено."
+
+    if query:
+        header = f"📰 Новини за запитом '{query}':\n\n"
+    elif category:
+        header = f"📰 Останні новини в категорії '{category}':\n\n"
+    else:
+        header = "📰 Останні новини:\n\n"
+
+    news_message = header
+
+    for i, article in enumerate(articles[:5], 1):
+        news_message += (
+            f"{i}. {article['title']}\n"
+            f"Джерело: {article['source']}\n"
+            f"Посилання: {article['url']}\n\n"
+        )
+
+    return news_message
+
+
+# Процесори запитів
+async def process_weather_request(message: Message, city: str, state: Optional[FSMContext] = None):
+    """Обробка запиту на погоду"""
+    await make_api_request(
+        endpoint="weather",
+        params={"city": city},
+        message=message,
+        error_message="Помилка при отриманні даних про погоду.",
+        formatter=format_weather_response,
+        state=state
+    )
+
+
+async def process_currency_request(message: Message, base: str, target: str, state: Optional[FSMContext] = None):
+    """Обробка запиту на курс валют"""
+    await make_api_request(
+        endpoint="currency",
+        params={"base": base, "target": target},
+        message=message,
+        error_message="Помилка при отриманні курсу валют.",
+        formatter=format_currency_response,
+        state=state
+    )
+
+
+async def process_news_request(
+        message: Message,
+        query: Optional[str] = None,
+        category: Optional[str] = None,
+        state: Optional[FSMContext] = None
+):
+    """Обробка запиту на новини"""
+    params = {"country": "ua"}
+    if query:
+        params["query"] = query
+    if category:
+        params["category"] = category
+
+    def news_formatter(data: Dict[str, Any]) -> str:
+        return format_news_response(data, query, category)
+
+    await make_api_request(
+        endpoint="news",
+        params=params,
+        message=message,
+        error_message="Помилка при отриманні новин.",
+        formatter=news_formatter,
+        state=state
+    )
+
+
 # Хендлери для обробки команд
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -144,99 +309,7 @@ async def cmd_weather(message: Message, state: FSMContext):
 async def process_weather_city(message: Message, state: FSMContext):
     """Обробка введеного користувачем міста для погоди"""
     city = message.text.strip()
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/weather", params={"city": city})
-            response.raise_for_status()
-            weather_data = response.json()
-
-            weather_message = (
-                f"🌡 Погода в {weather_data['city']}, {weather_data['country']}:\n\n"
-                f"🌡 Температура: {weather_data['temperature']}°C (відчувається як {weather_data['feels_like']}°C)\n"
-                f"📝 Стан: {weather_data['description']}\n"
-                f"💧 Вологість: {weather_data['humidity']}%\n"
-                f"🌬 Швидкість вітру: {weather_data['wind_speed']} м/с\n"
-                f"🕒 Дані оновлено: {weather_data['timestamp']}"
-            )
-
-            return await message.answer(weather_message)
-
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            return await message.answer(f"Місто {city} не знайдено. Спробуйте ввести інше місто.")
-        else:
-            await message.answer("Помилка при отриманні даних про погоду. Спробуйте пізніше.")
-        logger.error(f"Помилка HTTP при отриманні погоди: {str(e)}")
-    except Exception as e:
-        await message.answer("Непередбачена помилка при отриманні даних про погоду. Спробуйте пізніше.")
-        logger.error(f"Непередбачена помилка при отриманні погоди: {str(e)}")
-
-    await state.clear()
-
-async def process_currency_request(message: Message, base: str, target: str):
-    """Обробка запиту на курс валют"""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/currency", params={"base": base, "target": target})
-            response.raise_for_status()
-            currency_data = response.json()
-
-            rate = currency_data["rate"]
-
-            currency_message = (
-                f"💱 Курс валют {base} → {target}:\n\n"
-                f"1 {base} = {rate:.4f} {target}\n"
-                f"10 {base} = {(rate * 10):.4f} {target}\n"
-                f"100 {base} = {(rate * 100):.4f} {target}\n"
-                f"1000 {base} = {(rate * 1000):.4f} {target}\n\n"
-                f"🕒 Дані на: {currency_data['date']}"
-            )
-
-            await message.answer(currency_message)
-
-    except Exception as e:
-        await message.answer("Помилка при отриманні курсу валют. Спробуйте пізніше.")
-        logger.error(f"Помилка при отриманні курсу валют: {str(e)}")
-
-
-async def process_news_request(message: Message, query: str = None):
-    """Обробка запиту на новини"""
-    try:
-        params = {"country": "ua"}
-        if query:
-            params["query"] = query
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/news", params=params)
-            response.raise_for_status()
-            news_data = response.json()
-
-            articles = news_data["articles"]
-
-            if not articles:
-                await message.answer("На жаль, новин за вашим запитом не знайдено.")
-                return
-
-            # Виводимо перші 5 новин
-            news_message = f"📰 Останні новини:"
-            if query:
-                news_message = f"📰 Новини за запитом '{query}':"
-
-            news_message += "\n\n"
-
-            for i, article in enumerate(articles[:5], 1):
-                news_message += (
-                    f"{i}. {article['title']}\n"
-                    f"Джерело: {article['source']}\n"
-                    f"Посилання: {article['url']}\n\n"
-                )
-
-            await message.answer(news_message)
-
-    except Exception as e:
-        await message.answer("Помилка при отриманні новин. Спробуйте пізніше.")
-        logger.error(f"Помилка при отриманні новин: {str(e)}")
+    await process_weather_request(message, city, state)
 
 
 @router.message(Command("currency"))
@@ -268,29 +341,7 @@ async def process_currency_callback(callback: CallbackQuery):
 
     # Розбираємо дані з callback
     _, base, target = callback.data.split("_")
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/currency", params={"base": base, "target": target})
-            response.raise_for_status()
-            currency_data = response.json()
-
-            rate = currency_data["rate"]
-
-            currency_message = (
-                f"💱 Курс валют {base} → {target}:\n\n"
-                f"1 {base} = {rate:.4f} {target}\n"
-                f"10 {base} = {(rate * 10):.4f} {target}\n"
-                f"100 {base} = {(rate * 100):.4f} {target}\n"
-                f"1000 {base} = {(rate * 1000):.4f} {target}\n\n"
-                f"🕒 Дані на: {currency_data['date']}"
-            )
-
-            await callback.message.answer(currency_message)
-
-    except Exception as e:
-        await callback.message.answer("Помилка при отриманні курсу валют. Спробуйте пізніше.")
-        logger.error(f"Помилка при отриманні курсу валют: {str(e)}")
+    await process_currency_request(callback.message, base, target)
 
 
 @router.message(Command("news"))
@@ -329,69 +380,14 @@ async def process_news_callback(callback: CallbackQuery, state: FSMContext):
         await state.set_state(NewsState.waiting_for_query)
         return
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/news", params={"category": category})
-            response.raise_for_status()
-            news_data = response.json()
-
-            articles = news_data["articles"]
-
-            if not articles:
-                await callback.message.answer("На жаль, новин за вашим запитом не знайдено.")
-                return
-
-            # Виводимо перші 5 новин
-            news_message = f"📰 Останні новини в категорії '{category}':\n\n"
-
-            for i, article in enumerate(articles[:5], 1):
-                news_message += (
-                    f"{i}. {article['title']}\n"
-                    f"Джерело: {article['source']}\n"
-                    f"Посилання: {article['url']}\n\n"
-                )
-
-            await callback.message.answer(news_message)
-
-    except Exception as e:
-        await callback.message.answer("Помилка при отриманні новин. Спробуйте пізніше.")
-        logger.error(f"Помилка при отриманні новин: {str(e)}")
+    await process_news_request(callback.message, category=category)
 
 
 @router.message(NewsState.waiting_for_query)
 async def process_news_query(message: Message, state: FSMContext):
     """Обробка введеного користувачем запиту для новин"""
     query = message.text.strip()
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/news", params={"query": query})
-            response.raise_for_status()
-            news_data = response.json()
-
-            articles = news_data["articles"]
-
-            if not articles:
-                await message.answer("На жаль, новин за вашим запитом не знайдено.")
-                return
-
-            # Виводимо перші 5 новин
-            news_message = f"📰 Новини за запитом '{query}':\n\n"
-
-            for i, article in enumerate(articles[:5], 1):
-                news_message += (
-                    f"{i}. {article['title']}\n"
-                    f"Джерело: {article['source']}\n"
-                    f"Посилання: {article['url']}\n\n"
-                )
-
-            await message.answer(news_message)
-
-    except Exception as e:
-        await message.answer("Помилка при отриманні новин. Спробуйте пізніше.")
-        logger.error(f"Помилка при отриманні новин: {str(e)}")
-
-    await state.clear()
+    await process_news_request(message, query=query, state=state)
 
 
 # Обробка вільного тексту (ключові слова)
@@ -422,36 +418,6 @@ async def handle_text(message: Message):
             "/currency - Курс валют\n"
             "/news - Новини"
         )
-
-
-async def process_weather_request(message: Message, city: str):
-    """Обробка запиту на погоду"""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/weather", params={"city": city})
-            response.raise_for_status()
-            weather_data = response.json()
-
-            weather_message = (
-                f"🌡 Погода в {weather_data['city']}, {weather_data['country']}:\n\n"
-                f"🌡 Температура: {weather_data['temperature']}°C (відчувається як {weather_data['feels_like']}°C)\n"
-                f"📝 Стан: {weather_data['description']}\n"
-                f"💧 Вологість: {weather_data['humidity']}%\n"
-                f"🌬 Швидкість вітру: {weather_data['wind_speed']} м/с\n"
-                f"🕒 Дані оновлено: {weather_data['timestamp']}"
-            )
-
-            await message.answer(weather_message)
-
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            await message.answer(f"Місто {city} не знайдено. Спробуйте ввести інше місто.")
-        else:
-            await message.answer("Помилка при отриманні даних про погоду. Спробуйте пізніше.")
-        logger.error(f"Помилка HTTP при отриманні погоди: {str(e)}")
-    except Exception as e:
-        await message.answer("Непередбачена помилка при отриманні даних про погоду. Спробуйте пізніше.")
-        logger.error(f"Непередбачена помилка при отриманні погоди: {str(e)}")
 
 
 # Реєстрація роутера і запуск бота
