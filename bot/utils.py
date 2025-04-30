@@ -1,308 +1,310 @@
 import logging
-from typing import Callable, Any, Dict, Optional
+import re
+from typing import Tuple, Optional
 
 import httpx
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    Message,
-)
-
-from settings import settings
-import logging
-from typing import Callable, Any, Dict, Optional
-
-import httpx
-from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    Message,
-)
+from aiogram.types import Message
 
 from settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Функція для витягування тексту з повідомлення
-def extract_text_from_message(message: Message) -> str:
-    """Витягує текст з повідомлення, якщо він є"""
-    if message.text:
-        return message.text
-    elif message.caption:
-        return message.caption
-    return ""
 
-
-# Функції для простого аналізу текстових запитів на основі ключових слів
-def has_weather_keywords(text: str) -> bool:
-    """Перевіряє, чи містить текст ключові слова, пов'язані з погодою"""
-    keywords = [
-        "погода",
-        "температура",
-        "градус",
-        "дощ",
-        "сніг",
-        "хмарно",
-        "ясно",
-        "вітер",
-    ]
-    return any(keyword in text.lower() for keyword in keywords)
-
-
-def has_currency_keywords(text: str) -> bool:
-    """Перевіряє, чи містить текст ключові слова, пов'язані з валютою"""
-    keywords = [
-        "курс",
-        "валюта",
-        "долар",
-        "євро",
-        "гривня",
-        "грн",
-        "usd",
-        "eur",
-        "uah",
-        "обмін",
-    ]
-    return any(keyword in text.lower() for keyword in keywords)
-
-
-def has_news_keywords(text: str) -> bool:
-    """Перевіряє, чи містить текст ключові слова, пов'язані з новинами"""
-    keywords = ["новини", "новина", "події", "що відбувається", "що нового", "статті"]
-    return any(keyword in text.lower() for keyword in keywords)
-
-
-def extract_city_from_text(text: str) -> str:
-    """Спрощений алгоритм для витягування назви міста з тексту"""
-    common_cities = [
-        "київ",
-        "харків",
-        "одеса",
-        "дніпро",
-        "львів",
-        "запоріжжя",
-        "донецьк",
-        "луганськ",
-        "симферополь",
-        "херсон",
-        "миколаїв",
-        "вінниця",
-        "полтава",
-        "чернігів",
-        "черкаси",
-        "хмельницький",
-        "житомир",
-        "суми",
-        "рівне",
-        "івано-франківськ",
-        "тернопіль",
-        "луцьк",
-        "ужгород",
-        "чернівці",
-    ]
-
-    # Перевіряємо, чи є в тексті назва відомого міста
-    text_lower = text.lower()
-    for city in common_cities:
-        if city in text_lower:
-            # Повертаємо місто з правильним регістром (перша літера велика)
-            return city.capitalize()
-
-    # Якщо відоме місто не знайдено, повертаємо Київ за замовчуванням
-    return "Київ"
-
-
-def extract_currency_from_text(text: str) -> tuple:
-    """Спрощений алгоритм для витягування валютної пари з тексту"""
-    text_lower = text.lower()
-
-    base = "USD"  # За замовчуванням
-    target = "UAH"  # За замовчуванням
-
-    # Визначаємо базову валюту
-    if "євро" in text_lower or "eur" in text_lower:
-        base = "EUR"
-    elif "долар" in text_lower or "usd" in text_lower:
-        base = "USD"
-    elif "фунт" in text_lower or "gbp" in text_lower:
-        base = "GBP"
-
-    # Визначаємо цільову валюту
-    if "гривня" in text_lower or "грн" in text_lower or "uah" in text_lower:
-        target = "UAH"
-    elif "💩" in text_lower or "rub" in text_lower:
-        target = "RUB"
-    elif "злотий" in text_lower or "pln" in text_lower:
-        target = "PLN"
-
-    return base, target
-
-
-# Утиліта для роботи з API
-async def make_api_request(
-        endpoint: str,
-        params: Dict[str, Any],
-        message: Message,
-        error_message: str,
-        formatter: Callable[[Dict[str, Any]], str],
-        state: Optional[FSMContext] = None,
-) -> bool:
+async def process_weather_request(
+        message: Message, city: str = "Київ", state: Optional[FSMContext] = None
+):
     """
-    Універсальна функція для виконання API-запитів з обробкою помилок і форматуванням відповіді.
-
-    Args:
-        endpoint: Кінцева точка API
-        params: Параметри запиту
-        message: Об'єкт повідомлення для відповіді
-        error_message: Повідомлення про помилку
-        formatter: Функція для форматування успішної відповіді
-        state: Об'єкт стану FSM для очищення після запиту (опціонально)
-
-    Returns:
-        bool: True якщо запит успішний, False в іншому випадку
+    Обробка запиту погоди
+    :param message: Повідомлення від користувача
+    :param city: Місто для перевірки погоди
+    :param state: FSM контекст (опціонально)
     """
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{settings.API_BASE_URL}/{endpoint}", params=params)
-            response.raise_for_status()
-            data = response.json()
-
-            # Форматуємо і відправляємо відповідь
-            formatted_response = formatter(data)
-            await message.answer(formatted_response)
-
-            # Очищаємо стан, якщо він був переданий
-            if state:
-                await state.clear()
-
-            return True
-
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            # Для 404 зазвичай є спеціальне повідомлення на основі параметрів
-            param_value = next(iter(params.values()), "")
-            await message.answer(
-                f"Запит на '{param_value}' не знайдено. Спробуйте інший запит."
-            )
-        else:
-            await message.answer(f"{error_message} Спробуйте пізніше.")
-        logger.error(f"Помилка HTTP при запиті до {endpoint}: {str(e)}")
-    except Exception as e:
-        await message.answer(f"{error_message} Спробуйте пізніше.")
-        logger.error(f"Непередбачена помилка при запиті до {endpoint}: {str(e)}")
-
-    # Очищаємо стан у випадку помилки, якщо він був переданий
     if state:
         await state.clear()
 
-    return False
+    # Повідомлення про обробку
+    processing_message = await message.answer(f"🔍 Шукаю інформацію про погоду в місті {city}...")
 
+    try:
+        # Запит до API погоди
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings.API_BASE_URL}/weather", params={"city": city}
+            )
 
-# Функції для форматування відповідей від API
-def format_weather_response(data: Dict[str, Any]) -> str:
-    """Форматує дані про погоду у текстове повідомлення"""
-    return (
-        f"🌡 Погода в {data['city']}, {data['country']}:\n\n"
-        f"🌡 Температура: {data['temperature']}°C (відчувається як {data['feels_like']}°C)\n"
-        f"📝 Стан: {data['description']}\n"
-        f"💧 Вологість: {data['humidity']}%\n"
-        f"🌬 Швидкість вітру: {data['wind_speed']} м/с\n"
-        f"🕒 Дані оновлено: {data['timestamp']}"
-    )
+            if response.status_code == 200:
+                data = response.json()
 
+                # Формування повідомлення з результатами
+                weather_message = (
+                    f"🌡️ Погода в {data['city']}, {data['country']}:\n\n"
+                    f"Температура: {data['temperature']}°C (відчувається як {data['feels_like']}°C)\n"
+                    f"Опис: {data['description']}\n"
+                    f"Вологість: {data['humidity']}%\n"
+                    f"Тиск: {data['pressure']} гПа\n"
+                    f"Швидкість вітру: {data['wind_speed']} м/с"
+                )
 
-def format_currency_response(data: Dict[str, Any]) -> str:
-    """Форматує дані про курс валют у текстове повідомлення"""
-    base = data.get("base", "")
-    target = data.get("target", "")
-    rate = data.get("rate", 0)
-
-    return (
-        f"💱 Курс валют {base} → {target}:\n\n"
-        f"1 {base} = {rate:.4f} {target}\n"
-        f"10 {base} = {(rate * 10):.4f} {target}\n"
-        f"100 {base} = {(rate * 100):.4f} {target}\n"
-        f"1000 {base} = {(rate * 1000):.4f} {target}\n\n"
-        f"🕒 Дані на: {data['date']}"
-    )
-
-
-def format_news_response(
-        data: Dict[str, Any], query: Optional[str] = None, category: Optional[str] = None
-) -> str:
-    """Форматує дані про новини у текстове повідомлення"""
-    articles = data.get("articles", [])
-
-    if not articles:
-        return "На жаль, новин за вашим запитом не знайдено."
-
-    if query:
-        header = f"📰 Новини за запитом '{query}':\n\n"
-    elif category:
-        header = f"📰 Останні новини в категорії '{category}':\n\n"
-    else:
-        header = "📰 Останні новини:\n\n"
-
-    news_message = header
-
-    for i, article in enumerate(articles[:5], 1):
-        news_message += (
-            f"{i}. {article['title']}\n"
-            f"Джерело: {article['source']}\n"
-            f"Посилання: {article['url']}\n\n"
-        )
-
-    return news_message
-
-
-# Процесори запитів
-async def process_weather_request(
-        message: Message, city: str, state: Optional[FSMContext] = None
-):
-    """Обробка запиту на погоду"""
-    await make_api_request(
-        endpoint="weather",
-        params={"city": city},
-        message=message,
-        error_message="Помилка при отриманні даних про погоду.",
-        formatter=format_weather_response,
-        state=state,
-    )
+                await message.answer(weather_message)
+            else:
+                error_data = response.json()
+                await message.answer(f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати дані про погоду')}")
+    except Exception as e:
+        logger.error(f"Помилка при запиті погоди: {e}")
+        await message.answer("⚠️ Сталася помилка при запиті погоди. Спробуйте ще раз пізніше.")
+    finally:
+        # Видаляємо повідомлення про обробку
+        try:
+            await processing_message.delete()
+        except Exception as e:
+            logger.error(f"Помилка при видаленні повідомлення: {e}")
 
 
 async def process_currency_request(
-        message: Message, base: str, target: str, state: Optional[FSMContext] = None
+        message: Message, base: str = "USD", target: str = "UAH", state: Optional[FSMContext] = None
 ):
-    """Обробка запиту на курс валют"""
-    await make_api_request(
-        endpoint="currency",
-        params={"base": base, "target": target},
-        message=message,
-        error_message="Помилка при отриманні курсу валют.",
-        formatter=format_currency_response,
-        state=state,
-    )
+    """
+    Обробка запиту курсу валют
+    :param message: Повідомлення від користувача
+    :param base: Базова валюта
+    :param target: Цільова валюта
+    :param state: FSM контекст (опціонально)
+    """
+    if state:
+        await state.clear()
+
+    # Нормалізація кодів валют
+    base = base.upper()
+    target = target.upper()
+
+    # Повідомлення про обробку
+    processing_message = await message.answer(f"🔍 Шукаю інформацію про курс {base} до {target}...")
+
+    try:
+        # Запит до API курсу валют
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings.API_BASE_URL}/currency",
+                params={"base": base, "target": target},
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+
+                # Формування повідомлення з результатами
+                currency_message = (
+                    f"💱 Курс валют {data['base']} ➡️ {data['target']}:\n\n"
+                    f"1 {data['base']} = {data['rate']:.4f} {data['target']}\n"
+                    f"Дата оновлення: {data['date']}"
+                )
+
+                await message.answer(currency_message)
+            else:
+                error_data = response.json()
+                await message.answer(
+                    f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати дані про курс валют')}")
+    except Exception as e:
+        logger.error(f"Помилка при запиті курсу валют: {e}")
+        await message.answer("⚠️ Сталася помилка при запиті курсу валют. Спробуйте ще раз пізніше.")
+    finally:
+        # Видаляємо повідомлення про обробку
+        try:
+            await processing_message.delete()
+        except Exception as e:
+            logger.error(f"Помилка при видаленні повідомлення: {e}")
 
 
 async def process_news_request(
         message: Message,
         query: Optional[str] = None,
-        category: Optional[str] = None,
-        state: Optional[FSMContext] = None,
+        category: str = "general",
+        state: Optional[FSMContext] = None
 ):
-    """Обробка запиту на новини"""
-    params = {"country": "ua"}
+    """
+    Обробка запиту новин
+    :param message: Повідомлення від користувача
+    :param query: Запит для пошуку новин (опціонально)
+    :param category: Категорія новин
+    :param state: FSM контекст (опціонально)
+    """
+    if state:
+        await state.clear()
+
+    # Повідомлення про обробку
+    processing_text = f"🔍 Шукаю новини"
     if query:
-        params["query"] = query
-    if category:
-        params["category"] = category
+        processing_text += f" за запитом '{query}'"
+    if category != "general":
+        processing_text += f" в категорії '{category}'"
+    processing_message = await message.answer(processing_text + "...")
 
-    def news_formatter(data: Dict[str, Any]) -> str:
-        return format_news_response(data, query, category)
+    try:
+        # Запит до API новин
+        params = {"category": category}
+        if query:
+            params["query"] = query
 
-    await make_api_request(
-        endpoint="news",
-        params=params,
-        message=message,
-        error_message="Помилка при отриманні новин.",
-        formatter=news_formatter,
-        state=state,
-    )
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{settings.API_BASE_URL}/news", params=params
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+
+                if data["total_results"] > 0:
+                    # Заголовок повідомлення
+                    news_title = "📰 Останні новини"
+                    if query:
+                        news_title += f" за запитом '{query}'"
+                    if category != "general":
+                        news_title += f" в категорії '{category}'"
+
+                    # Формування списку новин
+                    news_list = ""
+                    for i, article in enumerate(data["articles"], 1):
+                        if i > 5:  # Обмеження на 5 новин
+                            break
+
+                        news_list += f"{i}. <a href='{article['url']}'>{article['title']}</a>\n"
+                        if article.get("description"):
+                            news_list += f"   {article['description'][:100]}...\n"
+                        if article.get("source"):
+                            news_list += f"   Джерело: {article['source']}\n"
+                        news_list += "\n"
+
+                    # Відправка повідомлення з новинами
+                    await message.answer(
+                        f"{news_title}\n\n{news_list}",
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                else:
+                    await message.answer("📭 Новин за вашим запитом не знайдено.")
+            else:
+                error_data = response.json()
+                await message.answer(f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати новини')}")
+    except Exception as e:
+        logger.error(f"Помилка при запиті новин: {e}")
+        await message.answer("⚠️ Сталася помилка при запиті новин. Спробуйте ще раз пізніше.")
+    finally:
+        # Видаляємо повідомлення про обробку
+        try:
+            await processing_message.delete()
+        except Exception as e:
+            logger.error(f"Помилка при видаленні повідомлення: {e}")
+
+
+def extract_text_from_message(message: Message) -> str:
+    """
+    Отримання тексту з повідомлення
+    :param message: Повідомлення
+    :return: Текст повідомлення
+    """
+    if message.text:
+        return message.text.strip()
+    elif message.caption:
+        return message.caption.strip()
+    return ""
+
+
+def has_weather_keywords(text: str) -> bool:
+    """
+    Перевірка наявності ключових слів погоди
+    :param text: Текст для перевірки
+    :return: True, якщо знайдено ключові слова
+    """
+    keywords = ["погода", "температура", "градус", "тепло", "холодно", "дощ"]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+
+def extract_city_from_text(text: str) -> str:
+    """
+    Витягування назви міста з тексту
+    :param text: Текст для аналізу
+    :return: Назва міста або "Київ" за замовчуванням
+    """
+    # Паттерн для пошуку міста після слів "в", "у", "для", "на"
+    pattern = r"(?:в|у|для|на)\s+([А-ЯІЇЄҐA-Z][а-яіїєґa-z]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+
+    if match:
+        return match.group(1)
+
+    # Якщо не знайдено за паттерном, шукаємо слово з великої літери
+    words = text.split()
+    for word in words:
+        if word[0].isupper() and len(word) > 2 and word.lower() not in ["яка", "який", "яке", "які", "скажи",
+                                                                        "скажіть"]:
+            return word
+
+    # За замовчуванням
+    return "Київ"
+
+
+def has_currency_keywords(text: str) -> bool:
+    """
+    Перевірка наявності ключових слів валют
+    :param text: Текст для перевірки
+    :return: True, якщо знайдено ключові слова
+    """
+    keywords = ["курс", "валюта", "долар", "євро", "гривня", "usd", "eur", "uah"]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)
+
+
+def extract_currency_from_text(text: str) -> Tuple[str, str]:
+    """
+    Витягування кодів валют з тексту
+    :param text: Текст для аналізу
+    :return: Кортеж (базова валюта, цільова валюта)
+    """
+    # Словник для розпізнавання валют за назвою
+    currency_map = {
+        "долар": "USD",
+        "доларах": "USD",
+        "доларів": "USD",
+        "долара": "USD",
+        "євро": "EUR",
+        "гривня": "UAH",
+        "гривні": "UAH",
+        "гривень": "UAH",
+        "гривнях": "UAH",
+        "usd": "USD",
+        "eur": "EUR",
+        "uah": "UAH"
+    }
+
+    text_lower = text.lower()
+
+    # Шукаємо відомі коди валют
+    found_currencies = []
+    for currency_name, currency_code in currency_map.items():
+        if currency_name in text_lower and currency_code not in found_currencies:
+            found_currencies.append(currency_code)
+
+    # Якщо знайдено дві валюти, повертаємо їх
+    if len(found_currencies) >= 2:
+        return found_currencies[0], found_currencies[1]
+
+    # Якщо знайдено одну валюту, комбінуємо її з UAH
+    if len(found_currencies) == 1:
+        if found_currencies[0] == "UAH":
+            return "USD", "UAH"
+        return found_currencies[0], "UAH"
+
+    # За замовчуванням
+    return "USD", "UAH"
+
+
+def has_news_keywords(text: str) -> bool:
+    """
+    Перевірка наявності ключових слів новин
+    :param text: Текст для перевірки
+    :return: True, якщо знайдено ключові слова
+    """
+    keywords = ["новини", "новина", "події", "що відбувається", "статті"]
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in keywords)

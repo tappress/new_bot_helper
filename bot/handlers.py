@@ -15,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
+from bot.nlp_processor import process_nlp_request
 from bot.utils import process_weather_request, process_currency_request, process_news_request, \
     extract_text_from_message, has_weather_keywords, extract_city_from_text, has_currency_keywords, \
     extract_currency_from_text, has_news_keywords
@@ -167,31 +168,38 @@ async def process_news_query(message: Message, state: FSMContext):
     await process_news_request(message, query=query, state=state)
 
 
-# Обробка вільного тексту (ключові слова)
+# Обробка вільного тексту з використанням NLP
 @router.message(F.text)
-async def handle_text(message: Message):
-    """Обробка звичайних текстових повідомлень на основі ключових слів"""
-    text = extract_text_from_message(message)
+async def handle_text(message: Message, state: FSMContext):
+    """Обробка звичайних текстових повідомлень з використанням NLP"""
 
-    if not text:
-        return
+    # Спробуємо обробити запит за допомогою NLP
+    nlp_processed = await process_nlp_request(message, state)
 
-    # Визначаємо тип запиту за ключовими словами
-    if has_weather_keywords(text):
-        city = extract_city_from_text(text)
-        await process_weather_request(message, city)
+    # Якщо NLP не зміг обробити запит, використовуємо базовий метод ключових слів
+    if not nlp_processed:
+        logger.info("NLP не зміг обробити запит, використовуємо метод ключових слів")
+        text = extract_text_from_message(message)
 
-    elif has_currency_keywords(text):
-        base, target = extract_currency_from_text(text)
-        await process_currency_request(message, base, target)
+        if not text:
+            return
 
-    elif has_news_keywords(text):
-        await process_news_request(message)
+        # Визначаємо тип запиту за ключовими словами
+        if has_weather_keywords(text):
+            city = extract_city_from_text(text)
+            await process_weather_request(message, city)
 
-    else:
-        await message.answer(
-            "Не вдалося розпізнати ваш запит. Спробуйте використати команди:\n"
-            "/weather - Погода\n"
-            "/currency - Курс валют\n"
-            "/news - Новини"
-        )
+        elif has_currency_keywords(text):
+            base, target = extract_currency_from_text(text)
+            await process_currency_request(message, base, target)
+
+        elif has_news_keywords(text):
+            await process_news_request(message)
+
+        else:
+            await message.answer(
+                "Не вдалося розпізнати ваш запит. Спробуйте використати команди:\n"
+                "/weather - Погода\n"
+                "/currency - Курс валют\n"
+                "/news - Новини"
+            )
