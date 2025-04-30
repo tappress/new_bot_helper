@@ -12,13 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 async def process_weather_request(
-        message: Message, city: str = "Київ", state: Optional[FSMContext] = None
-):
+        message: Message, city: str = "Київ", state: Optional[FSMContext] = None,
+        return_text: bool = False, voice_reply: bool = False
+) -> Optional[str]:
     """
     Обробка запиту погоди
     :param message: Повідомлення від користувача
     :param city: Місто для перевірки погоди
     :param state: FSM контекст (опціонально)
+    :param return_text: Повернути текст замість надсилання повідомлення
+    :param voice_reply: Чи потрібна голосова відповідь
+    :return: Текст відповіді, якщо return_text=True
     """
     if state:
         await state.clear()
@@ -46,13 +50,42 @@ async def process_weather_request(
                     f"Швидкість вітру: {data['wind_speed']} м/с"
                 )
 
+                # Спрощений варіант для голосової відповіді
+                if voice_reply:
+                    weather_voice_message = (
+                        f"Погода в місті {data['city']}. "
+                        f"Температура {data['temperature']} градусів, відчувається як {data['feels_like']}. "
+                        f"{data['description']}. "
+                        f"Вологість {data['humidity']} відсотків. "
+                        f"Швидкість вітру {data['wind_speed']} метрів на секунду."
+                    )
+
+                    if return_text:
+                        return weather_voice_message
+
+                if return_text:
+                    return weather_message
+
                 await message.answer(weather_message)
+                return None
             else:
                 error_data = response.json()
-                await message.answer(f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати дані про погоду')}")
+                error_message = f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати дані про погоду')}"
+
+                if return_text:
+                    return error_message
+
+                await message.answer(error_message)
+                return None
     except Exception as e:
         logger.error(f"Помилка при запиті погоди: {e}")
-        await message.answer("⚠️ Сталася помилка при запиті погоди. Спробуйте ще раз пізніше.")
+        error_message = "⚠️ Сталася помилка при запиті погоди. Спробуйте ще раз пізніше."
+
+        if return_text:
+            return error_message
+
+        await message.answer(error_message)
+        return None
     finally:
         # Видаляємо повідомлення про обробку
         try:
@@ -62,14 +95,18 @@ async def process_weather_request(
 
 
 async def process_currency_request(
-        message: Message, base: str = "USD", target: str = "UAH", state: Optional[FSMContext] = None
-):
+        message: Message, base: str = "USD", target: str = "UAH", state: Optional[FSMContext] = None,
+        return_text: bool = False, voice_reply: bool = False
+) -> Optional[str]:
     """
     Обробка запиту курсу валют
     :param message: Повідомлення від користувача
     :param base: Базова валюта
     :param target: Цільова валюта
     :param state: FSM контекст (опціонально)
+    :param return_text: Повернути текст замість надсилання повідомлення
+    :param voice_reply: Чи потрібна голосова відповідь
+    :return: Текст відповіді, якщо return_text=True
     """
     if state:
         await state.clear()
@@ -99,14 +136,40 @@ async def process_currency_request(
                     f"Дата оновлення: {data['date']}"
                 )
 
+                # Спрощений варіант для голосової відповіді
+                if voice_reply:
+                    currency_voice_message = (
+                        f"Курс {data['base']} до {data['target']} становить {data['rate']:.2f}. "
+                        f"Один {pronunciation_of_currency(data['base'])} "
+                        f"коштує {data['rate']:.2f} {pronunciation_of_currency(data['target'], data['rate'])}."
+                    )
+
+                    if return_text:
+                        return currency_voice_message
+
+                if return_text:
+                    return currency_message
+
                 await message.answer(currency_message)
+                return None
             else:
                 error_data = response.json()
-                await message.answer(
-                    f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати дані про курс валют')}")
+                error_message = f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати дані про курс валют')}"
+
+                if return_text:
+                    return error_message
+
+                await message.answer(error_message)
+                return None
     except Exception as e:
         logger.error(f"Помилка при запиті курсу валют: {e}")
-        await message.answer("⚠️ Сталася помилка при запиті курсу валют. Спробуйте ще раз пізніше.")
+        error_message = "⚠️ Сталася помилка при запиті курсу валют. Спробуйте ще раз пізніше."
+
+        if return_text:
+            return error_message
+
+        await message.answer(error_message)
+        return None
     finally:
         # Видаляємо повідомлення про обробку
         try:
@@ -115,13 +178,44 @@ async def process_currency_request(
             logger.error(f"Помилка при видаленні повідомлення: {e}")
 
 
+def pronunciation_of_currency(currency_code: str, amount: float = 1.0) -> str:
+    """
+    Правильна вимова назви валюти залежно від кількості
+    :param currency_code: Код валюти
+    :param amount: Кількість
+    :return: Правильна форма назви валюти
+    """
+    if currency_code == "USD":
+        if amount == 1:
+            return "долар"
+        elif 1 < amount < 5:
+            return "долари"
+        else:
+            return "доларів"
+    elif currency_code == "EUR":
+        if amount == 1:
+            return "євро"
+        else:
+            return "євро"
+    elif currency_code == "UAH":
+        if amount == 1:
+            return "гривня"
+        elif 1 < amount < 5:
+            return "гривні"
+        else:
+            return "гривень"
+    return currency_code
+
+
 async def process_news_request(
         message: Message,
         query: Optional[str] = None,
         category: str = "general",
         country: str = "ua",
-        state: Optional[FSMContext] = None
-):
+        state: Optional[FSMContext] = None,
+        return_text: bool = False,
+        voice_reply: bool = False
+) -> Optional[str]:
     """
     Обробка запиту новин
     :param message: Повідомлення від користувача
@@ -129,6 +223,9 @@ async def process_news_request(
     :param category: Категорія новин
     :param country: Країна новин (за замовчуванням "ua")
     :param state: FSM контекст (опціонально)
+    :param return_text: Повернути текст замість надсилання повідомлення
+    :param voice_reply: Чи потрібна голосова відповідь
+    :return: Текст відповіді, якщо return_text=True
     """
     if state:
         await state.clear()
@@ -197,31 +294,74 @@ async def process_news_request(
 
                     # Формування списку новин
                     news_list = ""
+                    voice_news_list = ""
+
                     for i, article in enumerate(data["articles"], 1):
                         if i > 5:  # Обмеження на 5 новин
                             break
 
                         news_list += f"{i}. <a href='{article['url']}'>{article['title']}</a>\n"
+
+                        # Додаємо до тексту для голосової відповіді
+                        voice_news_list += f"Новина {i}. {article['title']}. "
+
                         if article.get("description"):
                             news_list += f"   {article['description'][:100]}...\n"
+                            voice_news_list += f"{article['description'][:100]}. "
+
                         if article.get("source"):
                             news_list += f"   Джерело: {article['source']}\n"
+                            voice_news_list += f"Джерело: {article['source']}. "
+
                         news_list += "\n"
+                        voice_news_list += "\n"
+
+                    # Повний текст повідомлення
+                    news_message = f"{news_title}\n\n{news_list}"
+
+                    # Текст для голосової відповіді
+                    if voice_reply:
+                        news_voice_message = f"{news_title}. {voice_news_list}"
+
+                        if return_text:
+                            return news_voice_message
+
+                    if return_text:
+                        return news_message
 
                     # Відправка повідомлення з новинами
                     await message.answer(
-                        f"{news_title}\n\n{news_list}",
+                        news_message,
                         parse_mode="HTML",
                         disable_web_page_preview=True
                     )
+                    return None
                 else:
-                    await message.answer("📭 Новин за вашим запитом не знайдено.")
+                    no_news_message = "📭 Новин за вашим запитом не знайдено."
+
+                    if return_text:
+                        return no_news_message
+
+                    await message.answer(no_news_message)
+                    return None
             else:
                 error_data = response.json()
-                await message.answer(f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати новини')}")
+                error_message = f"⚠️ Помилка: {error_data.get('detail', 'Не вдалося отримати новини')}"
+
+                if return_text:
+                    return error_message
+
+                await message.answer(error_message)
+                return None
     except Exception as e:
         logger.error(f"Помилка при запиті новин: {e}")
-        await message.answer("⚠️ Сталася помилка при запиті новин. Спробуйте ще раз пізніше.")
+        error_message = "⚠️ Сталася помилка при запиті новин. Спробуйте ще раз пізніше."
+
+        if return_text:
+            return error_message
+
+        await message.answer(error_message)
+        return None
     finally:
         # Видаляємо повідомлення про обробку
         try:

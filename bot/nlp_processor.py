@@ -1,7 +1,6 @@
 import logging
 import re
-from typing import Optional, Dict, Any
-from typing import Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 
 import spacy
 from aiogram.fsm.context import FSMContext
@@ -9,6 +8,7 @@ from aiogram.types import Message
 from spacy.matcher import Matcher
 from spacy.tokens import Doc
 
+from bot.speech_processor import speech_processor
 from bot.utils import process_weather_request, process_currency_request, process_news_request
 
 logger = logging.getLogger(__name__)
@@ -429,22 +429,33 @@ except Exception as e:
     nlp_processor = NLPProcessor(model="en_core_web_sm")
 
 
-async def process_nlp_request(message: Message, state: Optional[FSMContext] = None) -> bool:
+async def process_nlp_request(
+        message: Message,
+        state: Optional[FSMContext] = None,
+        voice_text: Optional[str] = None,
+        use_voice_reply: bool = False
+) -> bool:
     """
     Обробка запиту користувача з використанням NLP
     :param message: Повідомлення користувача
     :param state: FSM контекст (опціонально)
+    :param voice_text: Розпізнаний текст з голосового повідомлення (опціонально)
+    :param use_voice_reply: Чи використовувати голосову відповідь
     :return: True, якщо запит успішно оброблено, False у іншому випадку
     """
-    if not message.text:
+    # Якщо передано розпізнаний текст, використовуємо його
+    # інакше беремо текст з повідомлення
+    text = voice_text if voice_text else (message.text or "")
+
+    if not text:
         return False
 
     try:
         # Виводимо у лог оригінальний текст для відладки
-        logger.info(f"Обробляємо запит від користувача: '{message.text}'")
+        logger.info(f"Обробляємо запит від користувача: '{text}'")
 
         # Використання NLP процесора для аналізу тексту
-        nlp_result = nlp_processor.process_text(message.text)
+        nlp_result = nlp_processor.process_text(text)
 
         intent = nlp_result["intent"]
         confidence = nlp_result["confidence"]
@@ -454,10 +465,10 @@ async def process_nlp_request(message: Message, state: Optional[FSMContext] = No
 
         # Знизимо мінімальний поріг для кращого результату
         if confidence < 0.4:
-            logger.info(f"Низька впевненість ({confidence}) для запиту: {message.text}")
+            logger.info(f"Низька впевненість ({confidence}) для запиту: {text}")
 
             # Якщо в тексті є явні ключові слова, спробуємо примусово встановити намір
-            text_lower = message.text.lower()
+            text_lower = text.lower()
 
             if any(word in text_lower for word in ["погода", "температура", "градус"]):
                 intent = "weather"
@@ -475,22 +486,39 @@ async def process_nlp_request(message: Message, state: Optional[FSMContext] = No
         if intent == "weather":
             city = entities.get("city", "Київ")
             logger.info(f"Обробляємо запит погоди для міста: {city}")
-            await process_weather_request(message, city, state)
-            return True
+
+            # Якщо використовувати голосову відповідь
+            if use_voice_reply:
+                response_text = await process_weather_request(message, city, state, return_text=True, voice_reply=True)
+                if response_text:
+                    await speech_processor.send_voice_reply(message, response_text)
+                return True
+            else:
+                await process_weather_request(message, city, state)
+                return True
 
         elif intent == "currency":
             base = entities.get("base", "USD")
             target = entities.get("target", "UAH")
             logger.info(f"Обробляємо запит валюти: {base} -> {target}")
-            await process_currency_request(message, base, target)
-            return True
+
+            # Якщо використовувати голосову відповідь
+            if use_voice_reply:
+                response_text = await process_currency_request(message, base, target, state, return_text=True,
+                                                               voice_reply=True)
+                if response_text:
+                    await speech_processor.send_voice_reply(message, response_text)
+                return True
+            else:
+                await process_currency_request(message, base, target, state)
+                return True
 
         elif intent == "news":
             category = entities.get("category", "general")
             query = entities.get("query")
 
             # FIX: Особливе опрацювання для запитів про спорт
-            text_lower = message.text.lower()
+            text_lower = text.lower()
             if "спорт" in text_lower:
                 category = "sports"
                 # Для запитів про спорт НЕ передаємо query
@@ -514,8 +542,19 @@ async def process_nlp_request(message: Message, state: Optional[FSMContext] = No
                 logger.info(f"Використовуємо категорію як запит: {query}")
 
             logger.info(f"Обробляємо запит новин. Категорія: {category}, Запит: {query}")
-            await process_news_request(message, query=query, category=category, state=state)
-            return True
+
+            # Якщо використовувати голосову відповідь
+            if use_voice_reply:
+                response_text = await process_news_request(
+                    message, query=query, category=category, state=state,
+                    return_text=True, voice_reply=True
+                )
+                if response_text:
+                    await speech_processor.send_voice_reply(message, response_text)
+                return True
+            else:
+                await process_news_request(message, query=query, category=category, state=state)
+                return True
 
         return False
 
