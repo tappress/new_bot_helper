@@ -41,25 +41,46 @@ async def handle_voice_message(message: Message, state: FSMContext):
     processing_message = await message.answer("🎤 Розпізнаю голосове повідомлення...")
 
     try:
+        # Перевіряємо метадані голосового повідомлення
+        voice = message.voice
+        logger.info(f"Отримано голосове повідомлення: тривалість={voice.duration}с, розмір={voice.file_size} байт")
+
+        if voice.file_size < 100:  # Якщо файл надто малий
+            await message.answer(
+                "⚠️ Голосове повідомлення надто коротке або порожнє. Будь ласка, спробуйте ще раз."
+            )
+            await processing_message.delete()
+            return
+
         # Розпізнаємо мовлення
         recognized_text = await speech_processor.recognize_speech(message)
 
+        # Видаляємо повідомлення про обробку
+        await processing_message.delete()
+
         if not recognized_text:
-            await message.answer(
-                "⚠️ Не вдалося розпізнати мовлення. Будь ласка, спробуйте ще раз або надішліть текстове повідомлення."
-            )
+            # Якщо розпізнавання не вдалося, але файл має розумний розмір,
+            # повідомляємо про проблему з розпізнаванням
+            if voice.file_size > 1000:
+                await message.answer(
+                    "⚠️ Не вдалося розпізнати мовлення. Це може бути через: \n"
+                    "- Фоновий шум\n"
+                    "- Нечітка вимова\n"
+                    "- Технічні обмеження розпізнавача\n\n"
+                    "Будь ласка, спробуйте ще раз більш чітко або надішліть текстове повідомлення."
+                )
+            else:
+                await message.answer(
+                    "⚠️ Не вдалося розпізнати мовлення. Будь ласка, спробуйте ще раз або надішліть текстове повідомлення."
+                )
             return
 
         # Логуємо розпізнаний текст і повідомляємо користувача
         logger.info(f"Розпізнано текст з голосового повідомлення: {recognized_text}")
         await message.answer(f"🎯 Розпізнано: \"{recognized_text}\"")
 
-        # Видаляємо повідомлення про обробку
-        await processing_message.delete()
-
-        # Обробляємо розпізнаний текст так само, як і текстові повідомлення
-        # Спочатку спробуємо через NLP
-        nlp_processed = await process_nlp_request(message, state, recognized_text)
+        # Обробляємо розпізнаний текст через NLP з голосовою відповіддю
+        nlp_processed = await process_nlp_request(message, state, recognized_text, use_voice_reply=True)
 
         # Якщо NLP не зміг обробити, використовуємо простіший метод ключових слів
         if not nlp_processed:
@@ -68,24 +89,25 @@ async def handle_voice_message(message: Message, state: FSMContext):
             # Визначаємо тип запиту за ключовими словами
             if has_weather_keywords(recognized_text):
                 city = extract_city_from_text(recognized_text)
-                response_text = await process_weather_request(message, city, state, return_text=True)
+                response_text = await process_weather_request(message, city, state, return_text=True, voice_reply=True)
                 if response_text:
                     await speech_processor.send_voice_reply(message, response_text)
 
             elif has_currency_keywords(recognized_text):
                 base, target = extract_currency_from_text(recognized_text)
-                response_text = await process_currency_request(message, base, target, state, return_text=True)
+                response_text = await process_currency_request(message, base, target, state, return_text=True,
+                                                              voice_reply=True)
                 if response_text:
                     await speech_processor.send_voice_reply(message, response_text)
 
             elif has_news_keywords(recognized_text):
-                response_text = await process_news_request(message, state=state, return_text=True)
+                response_text = await process_news_request(message, state=state, return_text=True, voice_reply=True)
                 if response_text:
                     await speech_processor.send_voice_reply(message, response_text)
 
             else:
                 response_text = (
-                    "Не вдалося розпізнати ваш запит. Спробуйте використати команди:\n"
+                    "Не вдалося зрозуміти ваш запит. Спробуйте використати команди:\n"
                     "/weather - Погода\n"
                     "/currency - Курс валют\n"
                     "/news - Новини"
@@ -93,7 +115,7 @@ async def handle_voice_message(message: Message, state: FSMContext):
                 await message.answer(response_text)
 
     except Exception as e:
-        logger.error(f"Помилка при обробці голосового повідомлення: {e}")
+        logger.error(f"Помилка при обробці голосового повідомлення: {e}", exc_info=True)
         await message.answer("⚠️ Сталася помилка при обробці голосового повідомлення.")
 
         # Видаляємо повідомлення про обробку, якщо воно ще існує

@@ -2,13 +2,13 @@
 Модуль для обробки голосу (STT та TTS)
 """
 import asyncio
+import json
 import logging
 import os
 import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
-import httpx
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, Message, Voice
 from gtts import gTTS
@@ -76,6 +76,10 @@ class SpeechProcessor:
             logger.error("Розпізнавач не ініціалізований. Неможливо розпізнати мовлення.")
             return None
 
+        temp_voice_path = None
+        wav_path = None
+        bot = None
+
         try:
             # Отримання об'єкта Voice з повідомлення, якщо передано Message
             voice = voice_message if isinstance(voice_message, Voice) else voice_message.voice
@@ -86,47 +90,98 @@ class SpeechProcessor:
 
             # Завантажуємо голосовий файл
             bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+
+            # Використовуємо конкретні імена файлів для кращого відстеження помилок
+            temp_voice_path = tempfile.mktemp(suffix=".ogg")
+            wav_path = tempfile.mktemp(suffix=".wav")
+
+            # Завантажуємо голосовий файл
+            logger.info(f"Завантаження голосового повідомлення file_id={voice.file_id}")
             voice_file = await bot.get_file(voice.file_id)
             voice_path = voice_file.file_path
 
-            # Створюємо тимчасовий файл для збереження голосового повідомлення
-            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_voice:
-                voice_data = await bot.download_file(voice_path)
-                temp_voice.write(voice_data.read())
-                temp_voice_path = temp_voice.name
+            # Завантажуємо файл
+            logger.info(f"Завантаження файлу з шляху {voice_path} до {temp_voice_path}")
+            voice_data = await bot.download_file(voice_path)
 
-            # Конвертуємо голосове повідомлення у формат WAV
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
-                wav_path = temp_wav.name
+            with open(temp_voice_path, "wb") as temp_voice:
+                temp_voice.write(voice_data.read())
+
+            logger.info(f"Голосове повідомлення збережено до {temp_voice_path}")
+
+            # Перевіряємо розмір завантаженого файлу
+            ogg_size = os.path.getsize(temp_voice_path)
+            logger.info(f"Розмір OGG файлу: {ogg_size} байт")
+
+            if ogg_size == 0:
+                logger.error("Завантажений файл має нульовий розмір")
+                return None
 
             # Використовуємо pydub для конвертації
-            audio = AudioSegment.from_ogg(temp_voice_path)
+            logger.info(f"Конвертація OGG в WAV: {temp_voice_path} -> {wav_path}")
+
+            # Встановлюємо детальніші логи для pydub
+            pydub_logger = logging.getLogger('pydub.converter')
+            pydub_logger.setLevel(logging.DEBUG)
+            pydub_logger.addHandler(logging.StreamHandler())
+
+            # Конвертуємо OGG в WAV з явними налаштуваннями
+            audio = AudioSegment.from_file(temp_voice_path, format="ogg")
+
+            # Виводимо інформацію про аудіофайл
+            logger.info(f"Аудіофайл: тривалість={len(audio)}мс, канали={audio.channels}, частота={audio.frame_rate}Гц")
+
             # Конвертуємо в 16kHz mono для Vosk
             audio = audio.set_frame_rate(16000).set_channels(1)
             audio.export(wav_path, format="wav")
+
+            # Перевіряємо розмір WAV файлу
+            wav_size = os.path.getsize(wav_path)
+            logger.info(f"Розмір WAV файлу: {wav_size} байт")
+
+            if wav_size == 0:
+                logger.error("Конвертований WAV файл має нульовий розмір")
+                return None
 
             # Зчитуємо WAV файл для розпізнавання
             with open(wav_path, "rb") as wav_file:
                 wav_data = wav_file.read()
 
+            # Перевіряємо розмір даних WAV
+            logger.info(f"Розмір даних WAV: {len(wav_data)} байт")
+
             # Скидаємо стан розпізнавача для нового файлу
             self._recognizer.Reset()
 
-            # Відправляємо аудіо на розпізнавання
-            self._recognizer.AcceptWaveform(wav_data)
-            result = self._recognizer.FinalResult()
+            # Розбиваємо аудіо на частини для поступової обробки
+            CHUNK_SIZE = 4000  # Розмір частини в байтах
+            results = []
 
-            # Видаляємо тимчасові файли
-            for path in [temp_voice_path, wav_path]:
-                try:
-                    os.unlink(path)
-                except Exception as e:
-                    logger.warning(f"Не вдалося видалити тимчасовий файл {path}: {e}")
+            for i in range(0, len(wav_data), CHUNK_SIZE):
+                chunk = wav_data[i:i+CHUNK_SIZE]
+                if len(chunk) == 0:
+                    continue
 
-            # Парсимо результат
-            import json
-            result_json = json.loads(result)
-            recognized_text = result_json.get("text", "").strip()
+                if self._recognizer.AcceptWaveform(chunk):
+                    part_result = json.loads(self._recognizer.Result())
+                    if "text" in part_result and part_result["text"].strip():
+                        results.append(part_result["text"])
+
+            # Отримуємо фінальний результат після обробки всіх частин
+            final_result = json.loads(self._recognizer.FinalResult())
+            if "text" in final_result and final_result["text"].strip():
+                results.append(final_result["text"])
+
+            # Об'єднуємо всі результати
+            recognized_text = " ".join(results).strip()
+
+            if not recognized_text and len(wav_data) > 0:
+                # Пробуємо альтернативний підхід - відправляємо все аудіо одразу
+                logger.info("Спроба альтернативного підходу розпізнавання")
+                self._recognizer.Reset()
+                self._recognizer.AcceptWaveform(wav_data)
+                final_result = json.loads(self._recognizer.FinalResult())
+                recognized_text = final_result.get("text", "").strip()
 
             if not recognized_text:
                 logger.warning("Не вдалося розпізнати текст з голосового повідомлення")
@@ -136,8 +191,24 @@ class SpeechProcessor:
             return recognized_text
 
         except Exception as e:
-            logger.error(f"Помилка при розпізнаванні мовлення: {e}")
+            logger.error(f"Помилка при розпізнаванні мовлення: {str(e)}", exc_info=True)
             return None
+        finally:
+            # Видаляємо тимчасові файли
+            for path in [temp_voice_path, wav_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                        logger.info(f"Видалено тимчасовий файл: {path}")
+                    except Exception as e:
+                        logger.warning(f"Не вдалося видалити тимчасовий файл {path}: {e}")
+
+            # Закриваємо бота
+            if bot:
+                session = getattr(bot, "session", None)
+                if session and hasattr(session, "close"):
+                    await session.close()
+                    logger.info("Закрито сесію бота")
 
     async def synthesize_speech(self, text: str, lang: str = "uk") -> Optional[Path]:
         """
@@ -147,19 +218,23 @@ class SpeechProcessor:
         :return: Шлях до аудіофайлу або None у разі помилки
         """
         try:
-            # Створюємо тимчасовий файл для аудіо
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
-                audio_path = Path(temp_audio.name)
+            # Створюємо тимчасовий файл для аудіо з конкретним ім'ям
+            audio_path = Path(tempfile.mktemp(suffix=".mp3"))
 
             # Використовуємо gTTS для синтезу мовлення
             tts = gTTS(text=text, lang=lang, slow=False)
             tts.save(str(audio_path))
 
+            # Перевіряємо, що файл був створений і має розмір
+            if not audio_path.exists() or audio_path.stat().st_size == 0:
+                logger.error(f"Не вдалося створити аудіофайл або файл порожній: {audio_path}")
+                return None
+
             logger.info(f"Успішно синтезовано мовлення та збережено у {audio_path}")
             return audio_path
 
         except Exception as e:
-            logger.error(f"Помилка при синтезі мовлення: {e}")
+            logger.error(f"Помилка при синтезі мовлення: {e}", exc_info=True)
             return None
 
     async def send_voice_reply(self, message: Message, text: str, lang: str = "uk") -> bool:
@@ -170,11 +245,24 @@ class SpeechProcessor:
         :param lang: Мова синтезу
         :return: True, якщо відправлено успішно, False інакше
         """
+        audio_path = None
         try:
             # Синтезуємо мовлення
             audio_path = await self.synthesize_speech(text, lang)
             if not audio_path:
                 logger.error("Не вдалося синтезувати мовлення")
+                return False
+
+            # Перевіряємо, що аудіофайл існує і має розмір
+            if not os.path.exists(audio_path):
+                logger.error(f"Аудіофайл не знайдено: {audio_path}")
+                return False
+
+            audio_size = os.path.getsize(audio_path)
+            logger.info(f"Розмір аудіофайлу: {audio_size} байт")
+
+            if audio_size == 0:
+                logger.error("Аудіофайл має нульовий розмір")
                 return False
 
             # Читаємо аудіофайл
@@ -183,20 +271,27 @@ class SpeechProcessor:
 
             # Відправляємо голосове повідомлення
             audio = BufferedInputFile(audio_data, filename="voice_reply.mp3")
-            await message.answer_voice(audio, caption=text[:1024] if len(text) <= 1024 else None)
 
-            # Видаляємо тимчасовий файл
-            try:
-                os.unlink(audio_path)
-            except Exception as e:
-                logger.warning(f"Не вдалося видалити тимчасовий файл {audio_path}: {e}")
+            # Визначаємо, чи додавати підпис
+            caption = None
+            if len(text) <= 1024:
+                caption = text
 
+            await message.answer_voice(audio, caption=caption)
             logger.info("Успішно відправлено голосову відповідь")
             return True
 
         except Exception as e:
-            logger.error(f"Помилка при відправці голосової відповіді: {e}")
+            logger.error(f"Помилка при відправці голосової відповіді: {e}", exc_info=True)
             return False
+        finally:
+            # Видаляємо тимчасовий файл
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.unlink(audio_path)
+                    logger.info(f"Видалено тимчасовий аудіофайл: {audio_path}")
+                except Exception as e:
+                    logger.warning(f"Не вдалося видалити тимчасовий файл {audio_path}: {e}")
 
 
 # Створення глобального екземпляра процесора мовлення
