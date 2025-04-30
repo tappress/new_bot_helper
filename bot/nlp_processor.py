@@ -1,12 +1,13 @@
 import logging
 import re
-from typing import Tuple, Dict, Optional, List, Any
+from typing import Optional, Dict, Any
+from typing import Tuple
 
 import spacy
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from spacy.matcher import Matcher
-from spacy.tokens import Doc, Span
+from spacy.tokens import Doc
 
 from bot.utils import process_weather_request, process_currency_request, process_news_request
 
@@ -234,20 +235,51 @@ class NLPProcessor:
         :param doc: Документ spaCy
         :return: Назва міста або "Київ" за замовчуванням
         """
+        # Словник відмінків українських міст
+        city_cases = {
+            "києві": "Київ",
+            "львові": "Львів",
+            "одесі": "Одеса",
+            "харкові": "Харків",
+            "дніпрі": "Дніпро",
+            "житомирі": "Житомир",
+            "вінниці": "Вінниця",
+            "полтаві": "Полтава",
+            "чернігові": "Чернігів",
+            "херсоні": "Херсон",
+            "запоріжжі": "Запоріжжя"
+        }
+
+        # Перевіряємо, чи є в тексті міста у відмінках
+        text_lower = doc.text.lower()
+        for city_case, city_name in city_cases.items():
+            if city_case in text_lower:
+                return city_name
+
         # Шукаємо геополітичні сутності (міста, країни)
         for ent in doc.ents:
             if ent.label_ in ["GPE", "LOC"]:  # Геополітична або Локація
+                # Перевіряємо, чи це не відмінок міста
+                if ent.text.lower() in city_cases:
+                    return city_cases[ent.text.lower()]
                 return ent.text.strip()
 
         # Якщо не знайдено, шукаємо власні назви після "в" або "у"
         for i, token in enumerate(doc):
             if token.text.lower() in ["в", "у"] and i < len(doc) - 1:
                 if doc[i + 1].pos_ == "PROPN":
+                    city_form = doc[i + 1].text.lower()
+                    # Перевіряємо, чи це не відмінок міста
+                    if city_form in city_cases:
+                        return city_cases[city_form]
                     return doc[i + 1].text.strip()
 
         # Якщо і так не знайдено, шукаємо будь-які власні назви
         for token in doc:
             if token.pos_ == "PROPN":
+                city_form = token.text.lower()
+                if city_form in city_cases:
+                    return city_cases[city_form]
                 return token.text.strip()
 
         # За замовчуванням повертаємо "Київ"
@@ -311,27 +343,68 @@ class NLPProcessor:
             "здоров'я": "health",
             "політика": "general",
             "економіка": "business",
-            "розваги": "entertainment"
+            "розваги": "entertainment",
+            # Додаємо відмінки слів та синоніми
+            "спорті": "sports",
+            "спортивні": "sports",
+            "спортивний": "sports",
+            "технологіях": "technology",
+            "науці": "science",
+            "науковий": "science",
+            "наукові": "science",
+            "бізнесу": "business",
+            "бізнесові": "business",
+            "політичні": "general",
+            "політичний": "general",
+            "політиці": "general",
+            "здоров'ї": "health",
+            "медичні": "health",
+            "медицина": "health"
         }
 
         # Шукаємо категорію в тексті
         category = "general"  # За замовчуванням
         query = None
 
-        # Пошук категорії
-        for token in doc:
-            if token.text.lower() in categories:
-                category = categories[token.text.lower()]
+        # Пошук категорії в повному тексті
+        text_lower = doc.text.lower()
+        for cat_word, cat_value in categories.items():
+            if cat_word in text_lower:
+                category = cat_value
                 break
 
+        # Якщо категорія не виявлена, шукаємо в окремих токенах
+        if category == "general":
+            for token in doc:
+                if token.text.lower() in categories:
+                    category = categories[token.text.lower()]
+                    break
+
+        # Для відладки виводимо у лог
+        logger.info(f"Визначена категорія новин: {category} з тексту: '{text_lower}'")
+
         # Пошук пошукового запиту (іменники і власні назви)
+        # Ігноруємо слова, пов'язані з новинами і категоріями
+        ignore_words = ["новини", "новина", "події", "новинами", "новинах",
+                        "розкажи", "скажи", "покажи", "дізнатися", "дізнатись"] + list(categories.keys())
+
         nouns = []
         for token in doc:
-            if token.pos_ in ["NOUN", "PROPN"] and token.text.lower() not in ["новини", "новина", "події"]:
+            if token.pos_ in ["NOUN", "PROPN", "ADJ"] and token.text.lower() not in ignore_words:
                 nouns.append(token.text)
 
         if nouns:
             query = " ".join(nouns)
+            logger.info(f"Сформований запит для новин: '{query}'")
+
+        # Якщо запит порожній, але категорія не general, використовуємо категорію як запит
+        if not query and category != "general":
+            # Отримуємо назву категорії українською
+            for cat_word, cat_value in categories.items():
+                if cat_value == category:
+                    query = cat_word
+                    break
+            logger.info(f"Використовуємо категорію як запит: '{query}'")
 
         return category, query
 
@@ -357,6 +430,9 @@ async def process_nlp_request(message: Message, state: Optional[FSMContext] = No
         return False
 
     try:
+        # Виводимо у лог оригінальний текст для відладки
+        logger.info(f"Обробляємо запит від користувача: '{message.text}'")
+
         # Використання NLP процесора для аналізу тексту
         nlp_result = nlp_processor.process_text(message.text)
 
@@ -366,26 +442,59 @@ async def process_nlp_request(message: Message, state: Optional[FSMContext] = No
 
         logger.info(f"NLP результат: намір={intent}, впевненість={confidence}, сутності={entities}")
 
-        # Обробка запиту лише якщо впевненість вище порогу
-        if confidence < 0.5:
+        # Знизимо мінімальний поріг для кращого результату
+        if confidence < 0.4:
             logger.info(f"Низька впевненість ({confidence}) для запиту: {message.text}")
-            return False
+
+            # Якщо в тексті є явні ключові слова, спробуємо примусово встановити намір
+            text_lower = message.text.lower()
+
+            if any(word in text_lower for word in ["погода", "температура", "градус"]):
+                intent = "weather"
+                logger.info(f"Примусово встановлюємо намір 'weather' на основі ключових слів")
+            elif any(word in text_lower for word in ["валюта", "курс", "долар", "євро", "гривня"]):
+                intent = "currency"
+                logger.info(f"Примусово встановлюємо намір 'currency' на основі ключових слів")
+            elif any(word in text_lower for word in ["новини", "новина", "події", "спорт", "політика"]):
+                intent = "news"
+                logger.info(f"Примусово встановлюємо намір 'news' на основі ключових слів")
+            else:
+                return False
 
         # Обробка різних намірів
         if intent == "weather":
             city = entities.get("city", "Київ")
+            logger.info(f"Обробляємо запит погоди для міста: {city}")
             await process_weather_request(message, city, state)
             return True
 
         elif intent == "currency":
             base = entities.get("base", "USD")
             target = entities.get("target", "UAH")
+            logger.info(f"Обробляємо запит валюти: {base} -> {target}")
             await process_currency_request(message, base, target)
             return True
 
         elif intent == "news":
             category = entities.get("category", "general")
             query = entities.get("query")
+
+            # Якщо запит про конкретний тип новин, але запит пустий, використовуємо категорію як запит
+            if category != "general" and not query:
+                # Створюємо запит на основі категорії
+                category_map = {
+                    "business": "бізнес",
+                    "technology": "технології",
+                    "sports": "спорт",
+                    "science": "наука",
+                    "health": "здоров'я",
+                    "general": "загальні",
+                    "entertainment": "розваги"
+                }
+                query = category_map.get(category, category)
+                logger.info(f"Використовуємо категорію як запит: {query}")
+
+            logger.info(f"Обробляємо запит новин. Категорія: {category}, Запит: {query}")
             await process_news_request(message, query=query, category=category, state=state)
             return True
 

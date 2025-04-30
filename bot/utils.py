@@ -226,18 +226,47 @@ def extract_city_from_text(text: str) -> str:
     :param text: Текст для аналізу
     :return: Назва міста або "Київ" за замовчуванням
     """
+    # Словник для перетворення міст у відмінках до називного відмінку
+    city_cases = {
+        "києві": "Київ",
+        "львові": "Львів",
+        "одесі": "Одеса",
+        "харкові": "Харків",
+        "дніпрі": "Дніпро",
+        "житомирі": "Житомир",
+        "вінниці": "Вінниця",
+        "полтаві": "Полтава",
+        "чернігові": "Чернігів",
+        "херсоні": "Херсон",
+        "запоріжжі": "Запоріжжя"
+    }
+
+    # Спочатку перевіряємо, чи не згадані міста у відмінках
+    text_lower = text.lower()
+    for city_case, city_name in city_cases.items():
+        if city_case in text_lower:
+            logger.info(f"Знайдено місто у відмінку: {city_case} -> {city_name}")
+            return city_name
+
     # Паттерн для пошуку міста після слів "в", "у", "для", "на"
     pattern = r"(?:в|у|для|на)\s+([А-ЯІЇЄҐA-Z][а-яіїєґa-z]+)"
     match = re.search(pattern, text, re.IGNORECASE)
 
     if match:
-        return match.group(1)
+        city = match.group(1)
+        # Перевіряємо, чи місто у відмінку
+        if city.lower() in city_cases:
+            return city_cases[city.lower()]
+        return city
 
     # Якщо не знайдено за паттерном, шукаємо слово з великої літери
     words = text.split()
     for word in words:
-        if word[0].isupper() and len(word) > 2 and word.lower() not in ["яка", "який", "яке", "які", "скажи",
+        if len(word) > 2 and word[0].isupper() and word.lower() not in ["яка", "який", "яке", "які", "скажи",
                                                                         "скажіть"]:
+            # Перевіряємо, чи місто у відмінку
+            if word.lower() in city_cases:
+                return city_cases[word.lower()]
             return word
 
     # За замовчуванням
