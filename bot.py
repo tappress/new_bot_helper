@@ -8,23 +8,28 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 
 from settings import settings
 
 # Налаштування логування
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-    ]
+    ],
 )
 logger = logging.getLogger(__name__)
 
 # Налаштування бота
 API_TOKEN = settings.TELEGRAM_BOT_TOKEN
-API_BASE_URL = "http://localhost:8000"  # Базовий URL вашого FastAPI
+API_BASE_URL = "http://localhost:8000"
 
 # Створення об'єктів бота і диспетчера
 bot = Bot(token=API_TOKEN)
@@ -58,13 +63,33 @@ def extract_text_from_message(message: Message) -> str:
 # Функції для простого аналізу текстових запитів на основі ключових слів
 def has_weather_keywords(text: str) -> bool:
     """Перевіряє, чи містить текст ключові слова, пов'язані з погодою"""
-    keywords = ["погода", "температура", "градус", "дощ", "сніг", "хмарно", "ясно", "вітер"]
+    keywords = [
+        "погода",
+        "температура",
+        "градус",
+        "дощ",
+        "сніг",
+        "хмарно",
+        "ясно",
+        "вітер",
+    ]
     return any(keyword in text.lower() for keyword in keywords)
 
 
 def has_currency_keywords(text: str) -> bool:
     """Перевіряє, чи містить текст ключові слова, пов'язані з валютою"""
-    keywords = ["курс", "валюта", "долар", "євро", "гривня", "грн", "usd", "eur", "uah", "обмін"]
+    keywords = [
+        "курс",
+        "валюта",
+        "долар",
+        "євро",
+        "гривня",
+        "грн",
+        "usd",
+        "eur",
+        "uah",
+        "обмін",
+    ]
     return any(keyword in text.lower() for keyword in keywords)
 
 
@@ -76,9 +101,32 @@ def has_news_keywords(text: str) -> bool:
 
 def extract_city_from_text(text: str) -> str:
     """Спрощений алгоритм для витягування назви міста з тексту"""
-    common_cities = ["київ", "харків", "одеса", "дніпро", "львів", "запоріжжя", "донецьк", "луганськ", "симферополь",
-                     "херсон", "миколаїв", "вінниця", "полтава", "чернігів", "черкаси", "хмельницький", "житомир",
-                     "суми", "рівне", "івано-франківськ", "тернопіль", "луцьк", "ужгород", "чернівці"]
+    common_cities = [
+        "київ",
+        "харків",
+        "одеса",
+        "дніпро",
+        "львів",
+        "запоріжжя",
+        "донецьк",
+        "луганськ",
+        "симферополь",
+        "херсон",
+        "миколаїв",
+        "вінниця",
+        "полтава",
+        "чернігів",
+        "черкаси",
+        "хмельницький",
+        "житомир",
+        "суми",
+        "рівне",
+        "івано-франківськ",
+        "тернопіль",
+        "луцьк",
+        "ужгород",
+        "чернівці",
+    ]
 
     # Перевіряємо, чи є в тексті назва відомого міста
     text_lower = text.lower()
@@ -119,12 +167,12 @@ def extract_currency_from_text(text: str) -> tuple:
 
 # Утиліта для роботи з API
 async def make_api_request(
-        endpoint: str,
-        params: Dict[str, Any],
-        message: Message,
-        error_message: str,
-        formatter: Callable[[Dict[str, Any]], str],
-        state: Optional[FSMContext] = None
+    endpoint: str,
+    params: Dict[str, Any],
+    message: Message,
+    error_message: str,
+    formatter: Callable[[Dict[str, Any]], str],
+    state: Optional[FSMContext] = None,
 ) -> bool:
     """
     Універсальна функція для виконання API-запитів з обробкою помилок і форматуванням відповіді.
@@ -160,7 +208,9 @@ async def make_api_request(
         if e.response.status_code == 404:
             # Для 404 зазвичай є спеціальне повідомлення на основі параметрів
             param_value = next(iter(params.values()), "")
-            await message.answer(f"Запит на '{param_value}' не знайдено. Спробуйте інший запит.")
+            await message.answer(
+                f"Запит на '{param_value}' не знайдено. Спробуйте інший запит."
+            )
         else:
             await message.answer(f"{error_message} Спробуйте пізніше.")
         logger.error(f"Помилка HTTP при запиті до {endpoint}: {str(e)}")
@@ -204,7 +254,9 @@ def format_currency_response(data: Dict[str, Any]) -> str:
     )
 
 
-def format_news_response(data: Dict[str, Any], query: Optional[str] = None, category: Optional[str] = None) -> str:
+def format_news_response(
+    data: Dict[str, Any], query: Optional[str] = None, category: Optional[str] = None
+) -> str:
     """Форматує дані про новини у текстове повідомлення"""
     articles = data.get("articles", [])
 
@@ -231,7 +283,9 @@ def format_news_response(data: Dict[str, Any], query: Optional[str] = None, cate
 
 
 # Процесори запитів
-async def process_weather_request(message: Message, city: str, state: Optional[FSMContext] = None):
+async def process_weather_request(
+    message: Message, city: str, state: Optional[FSMContext] = None
+):
     """Обробка запиту на погоду"""
     await make_api_request(
         endpoint="weather",
@@ -239,11 +293,13 @@ async def process_weather_request(message: Message, city: str, state: Optional[F
         message=message,
         error_message="Помилка при отриманні даних про погоду.",
         formatter=format_weather_response,
-        state=state
+        state=state,
     )
 
 
-async def process_currency_request(message: Message, base: str, target: str, state: Optional[FSMContext] = None):
+async def process_currency_request(
+    message: Message, base: str, target: str, state: Optional[FSMContext] = None
+):
     """Обробка запиту на курс валют"""
     await make_api_request(
         endpoint="currency",
@@ -251,15 +307,15 @@ async def process_currency_request(message: Message, base: str, target: str, sta
         message=message,
         error_message="Помилка при отриманні курсу валют.",
         formatter=format_currency_response,
-        state=state
+        state=state,
     )
 
 
 async def process_news_request(
-        message: Message,
-        query: Optional[str] = None,
-        category: Optional[str] = None,
-        state: Optional[FSMContext] = None
+    message: Message,
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    state: Optional[FSMContext] = None,
 ):
     """Обробка запиту на новини"""
     params = {"country": "ua"}
@@ -277,7 +333,7 @@ async def process_news_request(
         message=message,
         error_message="Помилка при отриманні новин.",
         formatter=news_formatter,
-        state=state
+        state=state,
     )
 
 
@@ -315,23 +371,39 @@ async def process_weather_city(message: Message, state: FSMContext):
 @router.message(Command("currency"))
 async def cmd_currency(message: Message):
     """Обробка команди /currency"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="USD → UAH", callback_data="currency_USD_UAH"),
-            InlineKeyboardButton(text="EUR → UAH", callback_data="currency_EUR_UAH")
-        ],
-        [
-            InlineKeyboardButton(text="UAH → USD", callback_data="currency_UAH_USD"),
-            InlineKeyboardButton(text="UAH → EUR", callback_data="currency_UAH_EUR")
-        ],
-        [
-            InlineKeyboardButton(text="EUR → USD", callback_data="currency_EUR_USD"),
-            InlineKeyboardButton(text="USD → EUR", callback_data="currency_USD_EUR")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="USD → UAH", callback_data="currency_USD_UAH"
+                ),
+                InlineKeyboardButton(
+                    text="EUR → UAH", callback_data="currency_EUR_UAH"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="UAH → USD", callback_data="currency_UAH_USD"
+                ),
+                InlineKeyboardButton(
+                    text="UAH → EUR", callback_data="currency_UAH_EUR"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="EUR → USD", callback_data="currency_EUR_USD"
+                ),
+                InlineKeyboardButton(
+                    text="USD → EUR", callback_data="currency_USD_EUR"
+                ),
+            ],
         ]
-    ])
+    )
 
-    await message.answer("Виберіть валютну пару або введіть свою пару через пробіл (наприклад, 'USD UAH'):",
-                         reply_markup=keyboard)
+    await message.answer(
+        "Виберіть валютну пару або введіть свою пару через пробіл (наприклад, 'USD UAH'):",
+        reply_markup=keyboard,
+    )
 
 
 @router.callback_query(F.data.startswith("currency_"))
@@ -347,25 +419,29 @@ async def process_currency_callback(callback: CallbackQuery):
 @router.message(Command("news"))
 async def cmd_news(message: Message):
     """Обробка команди /news"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Загальні", callback_data="news_general"),
-            InlineKeyboardButton(text="Бізнес", callback_data="news_business")
-        ],
-        [
-            InlineKeyboardButton(text="Технології", callback_data="news_technology"),
-            InlineKeyboardButton(text="Спорт", callback_data="news_sports")
-        ],
-        [
-            InlineKeyboardButton(text="Наука", callback_data="news_science"),
-            InlineKeyboardButton(text="Здоров'я", callback_data="news_health")
-        ],
-        [
-            InlineKeyboardButton(text="За запитом", callback_data="news_custom")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Загальні", callback_data="news_general"),
+                InlineKeyboardButton(text="Бізнес", callback_data="news_business"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Технології", callback_data="news_technology"
+                ),
+                InlineKeyboardButton(text="Спорт", callback_data="news_sports"),
+            ],
+            [
+                InlineKeyboardButton(text="Наука", callback_data="news_science"),
+                InlineKeyboardButton(text="Здоров'я", callback_data="news_health"),
+            ],
+            [InlineKeyboardButton(text="За запитом", callback_data="news_custom")],
         ]
-    ])
+    )
 
-    await message.answer("Виберіть категорію новин або введіть свій запит:", reply_markup=keyboard)
+    await message.answer(
+        "Виберіть категорію новин або введіть свій запит:", reply_markup=keyboard
+    )
 
 
 @router.callback_query(F.data.startswith("news_"))
