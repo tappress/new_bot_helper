@@ -339,6 +339,10 @@ class NLPProcessor:
             "бізнес": "business",
             "технології": "technology",
             "спорт": "sports",
+            "спорту": "sports",  # Add genitive case
+            "спортивні": "sports",
+            "спортивний": "sports",
+            "спортивного": "sports",
             "наука": "science",
             "здоров'я": "health",
             "політика": "general",
@@ -346,8 +350,6 @@ class NLPProcessor:
             "розваги": "entertainment",
             # Додаємо відмінки слів та синоніми
             "спорті": "sports",
-            "спортивні": "sports",
-            "спортивний": "sports",
             "технологіях": "technology",
             "науці": "science",
             "науковий": "science",
@@ -368,6 +370,14 @@ class NLPProcessor:
 
         # Пошук категорії в повному тексті
         text_lower = doc.text.lower()
+
+        # Особливий випадок: спорт - повинен завжди повертати категорію sports без query
+        if "спорт" in text_lower or any(sport_word in text_lower for sport_word in
+                                        ["спорту", "спортивні", "спортивний", "спортивного", "спорті"]):
+            logger.info(f"Знайдено спортивну категорію в тексті: '{text_lower}'")
+            return "sports", None
+
+        # Звичайний пошук категорій
         for cat_word, cat_value in categories.items():
             if cat_word in text_lower:
                 category = cat_value
@@ -398,7 +408,7 @@ class NLPProcessor:
             logger.info(f"Сформований запит для новин: '{query}'")
 
         # Якщо запит порожній, але категорія не general, використовуємо категорію як запит
-        if not query and category != "general":
+        if not query and category != "general" and category != "sports":  # Exclude sports from this logic
             # Отримуємо назву категорії українською
             for cat_word, cat_value in categories.items():
                 if cat_value == category:
@@ -479,8 +489,17 @@ async def process_nlp_request(message: Message, state: Optional[FSMContext] = No
             category = entities.get("category", "general")
             query = entities.get("query")
 
+            # FIX: Особливе опрацювання для запитів про спорт
+            text_lower = message.text.lower()
+            if "спорт" in text_lower:
+                category = "sports"
+                # Для запитів про спорт НЕ передаємо query
+                # оскільки це обмежує результати
+                query = None
+                logger.info(f"Виявлено запит про спорт, встановлюємо категорію sports без query")
+
             # Якщо запит про конкретний тип новин, але запит пустий, використовуємо категорію як запит
-            if category != "general" and not query:
+            elif category != "general" and not query:
                 # Створюємо запит на основі категорії
                 category_map = {
                     "business": "бізнес",

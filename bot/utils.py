@@ -119,6 +119,7 @@ async def process_news_request(
         message: Message,
         query: Optional[str] = None,
         category: str = "general",
+        country: str = "ua",
         state: Optional[FSMContext] = None
 ):
     """
@@ -126,6 +127,7 @@ async def process_news_request(
     :param message: Повідомлення від користувача
     :param query: Запит для пошуку новин (опціонально)
     :param category: Категорія новин
+    :param country: Країна новин (за замовчуванням "ua")
     :param state: FSM контекст (опціонально)
     """
     if state:
@@ -141,9 +143,18 @@ async def process_news_request(
 
     try:
         # Запит до API новин
-        params = {"category": category}
+        params = {"category": category, "country": country}
         if query:
             params["query"] = query
+
+        # Для спортивних новин спробуємо спочатку без обмеження мови
+        if category == "sports" and country == "ua":
+            # Створюємо копію параметрів без ключа query
+            sports_params = params.copy()
+            if "query" in sports_params:
+                del sports_params["query"]
+
+            logger.info(f"Спеціальна обробка для спортивних новин: {sports_params}")
 
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -152,6 +163,29 @@ async def process_news_request(
 
             if response.status_code == 200:
                 data = response.json()
+
+                # Якщо не знайдено для спортивних новин, спробуємо без query
+                if data["total_results"] == 0 and category == "sports" and query:
+                    logger.info("Спортивні новини не знайдено з query, пробуємо без query")
+                    params_without_query = params.copy()
+                    del params_without_query["query"]
+
+                    response = await client.get(
+                        f"{settings.API_BASE_URL}/news", params=params_without_query
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+
+                # Якщо все ще немає результатів для спортивних новин, спробуємо з US
+                if data["total_results"] == 0 and category == "sports":
+                    logger.info("Спортивні новини не знайдено для UA, пробуємо US")
+                    us_params = {"category": "sports", "country": "us"}
+
+                    response = await client.get(
+                        f"{settings.API_BASE_URL}/news", params=us_params
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
 
                 if data["total_results"] > 0:
                     # Заголовок повідомлення
