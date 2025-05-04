@@ -1,13 +1,9 @@
-import asyncio
 import logging
-from typing import Callable, Any, Dict, Optional, Tuple
 
-import httpx
-from aiogram import Bot, Dispatcher, Router, F
+from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -15,10 +11,17 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
-from bot.utils import process_weather_request, process_currency_request, process_news_request, \
-    extract_text_from_message, has_weather_keywords, extract_city_from_text, has_currency_keywords, \
-    extract_currency_from_text, has_news_keywords
-from settings import settings
+from bot.utils import (
+    process_weather_request,
+    process_currency_request,
+    process_news_request,
+    extract_text_from_message,
+    has_weather_keywords,
+    extract_city_from_text,
+    has_currency_keywords,
+    extract_currency_from_text,
+    has_news_keywords,
+)
 
 logger = logging.getLogger(__name__)
 
